@@ -1,0 +1,25 @@
+[package]
+name = "led_simulator"
+version = "0.1.0"
+edition = "2024"
+description = "Virtual /dev/spidev device that decodes WS2812 frames and shows the LED colors in the terminal"
+license = "MIT"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+libc = "0.2"
+
+[dev-dependencies]
+linux-embedded-hal = "0.4"
+smart-leds = "0.4"
+spidev = "0.6"
+ws2812-spi = "0.5"
+
+[[example]]
+name = "spi_probe"
+
+[[example]]
+name = "ws2812_driver"
+
+[profile.release]
+opt-level = 2
