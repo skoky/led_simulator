@@ -1,8 +1,9 @@
 # led_simulator
 
-A virtual `/dev/spidev0.0` that decodes the WS2812 frames written to it and prints the
-resulting colors in the terminal. It exists so a WS2812 driver can be developed and tested
-on an ordinary Linux box, with no Raspberry Pi and no LED strip attached.
+A virtual `/dev/spidev0.0` that decodes the WS2812 frames written to it, prints the
+resulting colors in the terminal and mirrors them in a small always-on-top window. It
+exists so a WS2812 driver can be developed and tested on an ordinary Linux box, with no
+Raspberry Pi and no LED strip attached.
 
 ```
 18:53:04.618  ██  #FF0000  rgb(255, 0, 0)  red 100%
@@ -46,10 +47,25 @@ The node is created with mode `0666`, so the program under test runs unprivilege
 | `-v, --verbose` | print every frame, not only the ones that change the color |
 | `-t, --trace` | log opens, ioctls and byte counts to stderr |
 | `--no-color` | plain output (also automatic when stdout is not a terminal) |
+| `--no-popup` | do not open the color window, terminal output only |
 | `--fuse-debug` | libfuse protocol debugging |
 
 Only color *changes* are printed by default: a driver refreshing the same color 50×/s
 would otherwise bury the interesting transitions.
+
+## The popup
+
+A small window shows the current color as a swatch (one per LED for a strip) with its hex
+value and name, and asks the window manager to keep it above other windows. Close it and
+the simulator keeps running; `--no-popup` skips it entirely.
+
+Always-on-top is an X11 request — Wayland has no protocol for it — so the window is opened
+through X11, which on a Wayland desktop means XWayland. CUSE forces the process to run as
+root, and root inherits neither the desktop's X11 cookie nor its Wayland socket, so the
+`XAUTHORITY` of the user who ran `sudo` is located automatically (GNOME's
+`.mutter-Xwaylandauth*`, `gdm/Xauthority` or `~/.Xauthority`). If the window still cannot
+open, the failure is reported and the simulator carries on serving the device; `sudo -E`
+passes your whole environment through and usually fixes it.
 
 ## Trying it out
 
@@ -70,7 +86,7 @@ cargo run --example spi_probe -- /dev/spidev0.0 255,0,0 0,255,0
 ## Using it with pnp
 
 `pnp` opens `/dev/spidev0.0` on every LED change ([`crates/pnp/src/led/raspi.rs`]), so with
-the simulator running its LED output shows up as colored lines — red on start, green when
+the simulator running its LED output shows up as colored lines and in the popup — red on start, green when
 all is well, yellow while the bed moves, white while the controls are blocked.
 
 Note that `ws2812-spi` writes **one SPI byte per syscall** (152 syscalls per frame), which

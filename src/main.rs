@@ -7,13 +7,16 @@
 mod cuse;
 mod device;
 mod display;
+mod popup;
 mod ws2812;
 
 use crate::cuse::{CUSE_UNRESTRICTED_IOCTL, CuseInfo, cuse_lowlevel_main};
 use clap::Parser;
 use std::ffi::{CString, c_char, c_int};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Parser)]
@@ -38,6 +41,10 @@ struct Args {
     /// Plain output, no ANSI colors
     #[arg(long)]
     no_color: bool,
+
+    /// Do not open the always-on-top window showing the current color
+    #[arg(long)]
+    no_popup: bool,
 
     /// libfuse protocol debugging
     #[arg(long)]
@@ -71,16 +78,42 @@ fn main() -> ExitCode {
 
     // SAFETY: isatty only inspects the descriptor.
     let ansi = !args.no_color && unsafe { libc::isatty(libc::STDOUT_FILENO) } == 1;
+    let handle = (!args.no_popup).then(popup::Handle::default);
     device::init(device::Config {
         verbose: args.verbose,
         trace: args.trace,
         ansi,
+        popup: handle.clone(),
     });
 
     let watched = path.clone();
     std::thread::spawn(move || announce(&watched, mode));
 
-    let rc = run_session(&name, args.fuse_debug);
+    let rc = match handle {
+        // winit wants the event loop on the main thread, so CUSE gets a thread of its own.
+        Some(handle) => {
+            let stop = Arc::new(AtomicBool::new(false));
+            let ended = stop.clone();
+            let session = std::thread::spawn(move || {
+                let rc = run_session(&name, args.fuse_debug);
+                ended.store(true, Ordering::Relaxed);
+                rc
+            });
+
+            prepare_display();
+            if let Err(e) = popup::run(handle, stop.clone()) {
+                eprintln!("could not open the popup window: {e}");
+                eprintln!(
+                    "the simulator keeps running - use --no-popup to skip it, or `sudo -E` to pass your X11 cookie through"
+                );
+            } else if !stop.load(Ordering::Relaxed) {
+                println!("popup closed - the simulator keeps running, Ctrl-C to stop");
+            }
+
+            session.join().unwrap_or(1)
+        }
+        None => run_session(&name, args.fuse_debug),
+    };
 
     let (bytes, frames) = device::stats();
     println!("\nstopped: {bytes} bytes, {frames} frames");
@@ -141,4 +174,46 @@ fn announce(path: &str, mode: u32) {
     }
 
     println!("{path} ready ({mode:04o}) - waiting for WS2812 frames, Ctrl-C to stop");
+}
+
+/// Points the GUI at the X server of whoever ran `sudo`.
+///
+/// CUSE forces us to run as root, and root inherits neither the X11 cookie nor the Wayland
+/// socket of the desktop session. X11 - XWayland on a Wayland desktop - is also the only
+/// one of the two where a client can ask to stay on top, so that is what we target.
+fn prepare_display() {
+    if std::env::var_os("XAUTHORITY").is_some() {
+        return;
+    }
+
+    let Some(uid) = std::env::var_os("SUDO_UID").and_then(|u| u.to_string_lossy().parse::<u32>().ok()) else {
+        return;
+    };
+
+    match x11_cookie(uid) {
+        // SAFETY: still single-threaded here, so nothing can read the environment while
+        // it is being modified.
+        Some(cookie) => unsafe { std::env::set_var("XAUTHORITY", cookie) },
+        None => eprintln!("no X11 cookie found for uid {uid} - the popup may not open; try `sudo -E`"),
+    }
+}
+
+/// GNOME keeps the XWayland cookie in the user's runtime directory; a plain X session uses
+/// `~/.Xauthority`.
+fn x11_cookie(uid: u32) -> Option<PathBuf> {
+    let runtime = PathBuf::from(format!("/run/user/{uid}"));
+
+    if let Ok(entries) = std::fs::read_dir(&runtime) {
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(".mutter-Xwaylandauth") {
+                return Some(entry.path());
+            }
+        }
+    }
+
+    let home = std::env::var_os("SUDO_USER").map(|user| PathBuf::from("/home").join(user));
+    [Some(runtime.join("gdm/Xauthority")), home.map(|h| h.join(".Xauthority"))]
+        .into_iter()
+        .flatten()
+        .find(|path| path.exists())
 }

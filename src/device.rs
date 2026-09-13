@@ -3,6 +3,7 @@
 
 use crate::cuse::*;
 use crate::display;
+use crate::popup;
 use crate::ws2812::{Decoder, Rgb};
 use std::ffi::{c_char, c_int, c_uint, c_void};
 use std::sync::{Mutex, OnceLock};
@@ -47,6 +48,8 @@ pub struct Config {
     /// Log ioctls, opens and byte counts.
     pub trace: bool,
     pub ansi: bool,
+    /// Window mirroring the current color, unless it was switched off.
+    pub popup: Option<popup::Handle>,
 }
 
 pub struct Sim {
@@ -102,6 +105,11 @@ impl Sim {
             }
 
             println!("{}", display::frame_line(&frame.pixels, self.config.ansi));
+
+            if let Some(popup) = &self.config.popup {
+                popup.set(&frame.pixels);
+            }
+
             self.last = Some(frame.pixels);
         }
     }
