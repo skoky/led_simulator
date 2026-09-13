@@ -1,6 +1,6 @@
 [package]
 name = "led_simulator"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Virtual /dev/spidev device that decodes WS2812 frames and shows the LED colors in the terminal"
 license = "MIT"
